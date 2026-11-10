@@ -1,0 +1,763 @@
+{
+  "id": "proj-omCE4CcJoao",
+  "organization_project_id": "cbb2ced1-c097-4323-aac9-a4ac92cd2ece",
+  "name": "IDN-001",
+  "code": "I0",
+  "story_code_seq": 6,
+  "tech_stack": null,
+  "design": "# IDN-001 — Design\n\n## Tech Stack\n_Not specified._\n\n## Architecture\n_High-level components, their responsibilities, and how they interact._\n\n## Key Decisions\n_Significant technical decisions and trade-offs (with alternatives considered)._\n\n- **Security admin authorization (task-r1c4HYJosAE): role claim in the access token.** Admin session endpoints authorize callers by checking for the security admin role claim in the validated access token. Alternatives considered and not chosen: scope checked against org IdP groups, separate admin API credentials, deferring to platform gateway policy.\n\n## Data Model\n_Main entities/tables and their relationships._\n\n## Open Questions\n_Anything unresolved to decide before or during the build._\n",
+  "brd": {
+    "id": "brd-IUdMMyQcbi0",
+    "source_type": "text",
+    "filename": null,
+    "raw_text": "# Business Requirements Document — Identity Service (token rotation)\n\nProject: **Identity Service** (code IDN) · Team: Platform · Department: Engineering\nScope of this BRD: **refresh-token rotation and session revocation**. Login,\npassword reset and SSO federation are already live and out of scope.\n\n## Overview\nEvery Indnord application signs users in through the Identity Service and\nreceives a short-lived access token plus a long-lived refresh token. Refresh\ntokens today live for 30 days and are reusable, so a stolen refresh token\ngives an attacker a month of silent access. This slice makes refresh tokens\nsingle-use, detects reuse, and lets a user or an administrator end sessions.\n\n## Goals\n- A leaked refresh token is useless after its first use.\n- Reuse of an already-rotated token ends the whole session family within\n  one request.\n- A user can see and end their own sessions; an admin can end anyone's.\n\n## Users\n- **End user**: signs in, keeps using apps without re-login, reviews and\n  ends their sessions.\n- **Client application**: exchanges a refresh token for a new pair.\n- **Security admin**: revokes a user's sessions after an incident.\n\n## Functional requirements\n\n1. **Token pair issue**\n   - On sign-in the service issues an access token (15 minutes) and a\n     refresh token (30 days) and records a **session** with device label,\n     IP, created time and last-used time.\n   - Refresh tokens are opaque random strings of at least 256 bits; only a\n     hash is stored.\n\n2. **Rotation**\n   - Exchanging a refresh token returns a new access token and a **new**\n     refresh token, and marks the presented token as used.\n   - The new token belongs to the same session (the session id is stable\n     across rotations).\n   - The last-used time on the session is updated on every exchange.\n\n3. **Reuse detection**\n   - Presenting a refresh token that was already rotated revokes the entire\n     session it belongs to, rejects the request with a distinct error code,\n     and writes a security event with the token's session id and the\n     presenting IP.\n   - A refresh token presented more than 30 days after issue is expired and\n     rejected without revoking the session.\n\n4. **Session management**\n   - An end user lists their active sessions (device label, IP, created,\n     last used, current-session marker) and ends any of them.\n   - A security admin lists and ends any user's sessions, and can end all\n     sessions of a user in one call.\n   - Ending a session invalidates its refresh token immediately; access\n     tokens already issued stay valid until they expire (at most 15 minutes).\n\n5. **Limits**\n   - A user may hold at most 10 active sessions; signing in past the limit\n     ends the least recently used session.\n\n## Non-functional requirements\n- The exchange endpoint handles 500 requests per second with a 99th\n  percentile under 100 ms.\n- Rotation is atomic: two concurrent exchanges of the same token result in\n  exactly one success and one reuse detection.\n- Security events are retained for one year.\n\n## Out of scope\n- Multi-factor authentication.\n- Device fingerprinting beyond the client-supplied label.\n- Access-token revocation lists.\n\n## Acceptance criteria\n- Exchange once: new pair returned, old token rejected on second use and the\n  session is revoked.\n- Concurrent double exchange: one succeeds, one is flagged as reuse, session\n  revoked, one security event written.\n- Ending a session from the user's list makes the next exchange on that\n  session fail.\n- An 11th sign-in ends the least recently used session, leaving exactly 10.",
+    "original_length": 3585,
+    "truncated": false,
+    "created_at": "2026-11-10T19:45:49.803783Z"
+  },
+  "technical_docs": {},
+  "epics": [
+    {
+      "id": "epic-KLcBlKIpB04",
+      "project_id": "proj-omCE4CcJoao",
+      "title": "Token issuance and sessions",
+      "description": "Issue access/refresh token pairs on sign-in and record a session for each sign-in.",
+      "user_stories": [
+        {
+          "id": "story-X0lKGyDmGu8",
+          "epic_id": "epic-KLcBlKIpB04",
+          "code_number": 1,
+          "title": "Receive token pair on sign-in",
+          "narrative": "As an end user, I want to receive an access token and a refresh token when I sign in, so that I can keep using apps without re-login.",
+          "specs": [
+            {
+              "id": "spec-GHzAI8r4zaM",
+              "story_id": "story-X0lKGyDmGu8",
+              "title": "Token pair issue",
+              "description": "On sign-in, issue a 15-minute access token and a 30-day opaque refresh token; store only a hash of the refresh token.",
+              "tasks": [
+                {
+                  "id": "task-cHgUvqYYnQA",
+                  "spec_id": "spec-GHzAI8r4zaM",
+                  "title": "Generate opaque refresh token",
+                  "description": "Generate refresh tokens from a cryptographically secure source with at least 256 bits of entropy.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-1b5u8n4FQMk",
+                      "text": "Refresh token has at least 256 bits of entropy",
+                      "given": null,
+                      "when": "a refresh token is generated",
+                      "then": "it is an opaque random string encoding at least 256 bits",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-tDK6PMDCpSY",
+                  "spec_id": "spec-GHzAI8r4zaM",
+                  "title": "Store refresh token hash only",
+                  "description": "Persist a hash of the refresh token for lookup and comparison; never persist the plaintext token.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-lGhESocopjU",
+                      "text": "Only hash persisted",
+                      "given": null,
+                      "when": "a refresh token is issued and the datastore is inspected",
+                      "then": "the plaintext token appears nowhere and only its hash is stored",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-cHgUvqYYnQA"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "needs a look",
+                  "confidence_note": "BRD says only a hash is stored but does not name the hash algorithm; assumed a fast one-way hash (e.g. SHA-256) is adequate since tokens are high-entropy.",
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-3YJhfIL5-As",
+                  "spec_id": "spec-GHzAI8r4zaM",
+                  "title": "Issue token pair on sign-in",
+                  "description": "On successful sign-in return an access token valid 15 minutes and a refresh token valid 30 days.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-gCa8D-0eK9s",
+                      "text": "Pair issued with correct lifetimes",
+                      "given": null,
+                      "when": "a user signs in successfully",
+                      "then": "the response contains an access token expiring in 15 minutes and a refresh token expiring in 30 days",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-tDK6PMDCpSY"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "confident",
+              "confidence_note": null,
+              "confidence_options": []
+            },
+            {
+              "id": "spec-tynb_fvEd6c",
+              "story_id": "story-X0lKGyDmGu8",
+              "title": "Session record",
+              "description": "Create a session record at sign-in holding device label, IP, created time and last-used time.",
+              "tasks": [
+                {
+                  "id": "task-lzd1yF83_aY",
+                  "spec_id": "spec-tynb_fvEd6c",
+                  "title": "Create session on sign-in",
+                  "description": "Persist a session with a stable id, client-supplied device label, IP, created time and last-used time, and link the first refresh token to it.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-zKM-EE3m8co",
+                      "text": "Session recorded",
+                      "given": null,
+                      "when": "a user signs in with a device label from an IP",
+                      "then": "a session exists with that device label, IP, created time and last-used time set",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-3YJhfIL5-As"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "confident",
+              "confidence_note": null,
+              "confidence_options": []
+            }
+          ],
+          "status": "approved",
+          "included": true,
+          "confidence": "confident",
+          "confidence_note": null,
+          "confidence_options": []
+        }
+      ],
+      "status": "approved",
+      "included": true,
+      "confidence": "confident",
+      "confidence_note": null,
+      "confidence_options": []
+    },
+    {
+      "id": "epic-7nfxgTUKv7Y",
+      "project_id": "proj-omCE4CcJoao",
+      "title": "Rotation and reuse detection",
+      "description": "Make refresh tokens single-use, rotate them atomically, and revoke the session on reuse.",
+      "user_stories": [
+        {
+          "id": "story-kRVd9eRv8VM",
+          "epic_id": "epic-7nfxgTUKv7Y",
+          "code_number": 2,
+          "title": "Rotate refresh token on exchange",
+          "narrative": "As a client application, I want to exchange a refresh token for a new pair, so that the user stays signed in with single-use tokens.",
+          "specs": [
+            {
+              "id": "spec-5PxW4qluA2s",
+              "story_id": "story-kRVd9eRv8VM",
+              "title": "Rotation exchange",
+              "description": "Exchange endpoint validates the presented token, marks it used, issues a new access token and new refresh token in the same session, and updates last-used time.",
+              "tasks": [
+                {
+                  "id": "task-15u7cm1yA4s",
+                  "spec_id": "spec-5PxW4qluA2s",
+                  "title": "Exchange refresh token for new pair",
+                  "description": "Validate the presented token, mark it used, and return a new access token and new refresh token bound to the same session id.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-3J9AxeMsnws",
+                      "text": "New pair returned, old token used",
+                      "given": null,
+                      "when": "a valid refresh token is exchanged once",
+                      "then": "a new access token and new refresh token are returned and the old token is marked used",
+                      "met": false
+                    },
+                    {
+                      "id": "ac-EYA_pfDmjwA",
+                      "text": "Session id stable",
+                      "given": null,
+                      "when": "a token is rotated",
+                      "then": "the new token belongs to the same session id",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-lzd1yF83_aY"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-OfbXI2OqGrk",
+                  "spec_id": "spec-5PxW4qluA2s",
+                  "title": "Update session last-used time",
+                  "description": "Set the session last-used time on every successful exchange.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-_K775z_rGys",
+                      "text": "Last-used updated",
+                      "given": null,
+                      "when": "an exchange succeeds",
+                      "then": "the session last-used time equals the exchange time",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-15u7cm1yA4s"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-v1rkkUFleZ0",
+                  "spec_id": "spec-5PxW4qluA2s",
+                  "title": "Make rotation atomic",
+                  "description": "Mark-as-used must be a single atomic conditional operation so concurrent exchanges of one token yield exactly one success.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-8-DVT7PKWMU",
+                      "text": "Concurrent double exchange",
+                      "given": null,
+                      "when": "two exchanges of the same token run concurrently",
+                      "then": "exactly one succeeds and the other is treated as reuse",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-15u7cm1yA4s"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "confident",
+              "confidence_note": null,
+              "confidence_options": []
+            },
+            {
+              "id": "spec-dXbZOvAm_C0",
+              "story_id": "story-kRVd9eRv8VM",
+              "title": "Exchange performance",
+              "description": "Exchange endpoint meets the stated throughput and latency target.",
+              "tasks": [
+                {
+                  "id": "task-lA8B4me2sQA",
+                  "spec_id": "spec-dXbZOvAm_C0",
+                  "title": "Verify exchange load target",
+                  "description": "Load-test the exchange endpoint at 500 requests per second and measure latency.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-GEBUeLOjOK4",
+                      "text": "Meets p99 target",
+                      "given": null,
+                      "when": "the endpoint is loaded at 500 requests per second",
+                      "then": "99th percentile latency is under 100 ms",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-v1rkkUFleZ0"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "confident",
+              "confidence_note": null,
+              "confidence_options": []
+            }
+          ],
+          "status": "approved",
+          "included": true,
+          "confidence": "confident",
+          "confidence_note": null,
+          "confidence_options": []
+        },
+        {
+          "id": "story-lhwXoRQYp5c",
+          "epic_id": "epic-7nfxgTUKv7Y",
+          "code_number": 3,
+          "title": "Detect refresh token reuse",
+          "narrative": "As a security admin, I want reuse of a rotated token to revoke the whole session, so that a leaked token is useless after its first use.",
+          "specs": [
+            {
+              "id": "spec-Zm-CA3GhR1E",
+              "story_id": "story-lhwXoRQYp5c",
+              "title": "Reuse handling",
+              "description": "Detect presentation of an already-used token, revoke its session, reject with a distinct error, and record a security event.",
+              "tasks": [
+                {
+                  "id": "task-h1U-5fLc9bw",
+                  "spec_id": "spec-Zm-CA3GhR1E",
+                  "title": "Revoke session on reuse",
+                  "description": "When an already-rotated token is presented, revoke the owning session and reject the request with a distinct error code.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-qL1bgM_qU64",
+                      "text": "Reuse revokes session",
+                      "given": null,
+                      "when": "an already-rotated refresh token is presented",
+                      "then": "the session is revoked and the request is rejected with the distinct reuse error code",
+                      "met": false
+                    },
+                    {
+                      "id": "ac-3Jug6S0cI3w",
+                      "text": "Newest token also dead",
+                      "given": null,
+                      "when": "the session was revoked by reuse and its latest refresh token is then presented",
+                      "then": "the exchange is rejected",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-15u7cm1yA4s"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "needs a look",
+                  "confidence_note": "BRD requires a 'distinct error code' but does not define its value or HTTP status; assumed a dedicated code (e.g. token_reuse_detected) different from expired/invalid.",
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-6BoO3EP4e2M",
+                  "spec_id": "spec-Zm-CA3GhR1E",
+                  "title": "Write reuse security event",
+                  "description": "On reuse, write a security event with the session id and presenting IP.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-2QyeDdKhotc",
+                      "text": "Event written",
+                      "given": null,
+                      "when": "reuse is detected",
+                      "then": "one security event is stored with the session id and presenting IP",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-h1U-5fLc9bw"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-CEfrOaJF9bk",
+                  "spec_id": "spec-Zm-CA3GhR1E",
+                  "title": "Retain security events one year",
+                  "description": "Apply a one-year retention policy to security events.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-VBMU0pNfdLs",
+                      "text": "One-year retention",
+                      "given": null,
+                      "when": "a security event is older than one year",
+                      "then": "it may be purged, and events younger than one year are never purged",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-6BoO3EP4e2M"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-E2l-jLSt9sI",
+                  "spec_id": "spec-Zm-CA3GhR1E",
+                  "title": "Reject expired token without revoking",
+                  "description": "Reject tokens presented more than 30 days after issue as expired, leaving the session intact.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-U-H2C459vIU",
+                      "text": "Expired rejected, session kept",
+                      "given": null,
+                      "when": "a refresh token is presented more than 30 days after issue",
+                      "then": "the request is rejected as expired and the session is not revoked",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-15u7cm1yA4s"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "confident",
+              "confidence_note": null,
+              "confidence_options": []
+            }
+          ],
+          "status": "approved",
+          "included": true,
+          "confidence": "confident",
+          "confidence_note": null,
+          "confidence_options": []
+        }
+      ],
+      "status": "approved",
+      "included": true,
+      "confidence": "confident",
+      "confidence_note": null,
+      "confidence_options": []
+    },
+    {
+      "id": "epic-KOeZ8e1bjq4",
+      "project_id": "proj-omCE4CcJoao",
+      "title": "Session management and limits",
+      "description": "Let users and security admins list and end sessions, and cap active sessions per user.",
+      "user_stories": [
+        {
+          "id": "story-Hg4LjLSjOcc",
+          "epic_id": "epic-KOeZ8e1bjq4",
+          "code_number": 4,
+          "title": "End user manages own sessions",
+          "narrative": "As an end user, I want to list and end my sessions, so that I can cut off devices I no longer trust.",
+          "specs": [
+            {
+              "id": "spec-Mh3EaX0_mKo",
+              "story_id": "story-Hg4LjLSjOcc",
+              "title": "User session API",
+              "description": "Authenticated endpoints to list the caller's active sessions and end one.",
+              "tasks": [
+                {
+                  "id": "task-HcaYBbNiC54",
+                  "spec_id": "spec-Mh3EaX0_mKo",
+                  "title": "List own active sessions",
+                  "description": "Return the caller's active sessions with device label, IP, created, last used and a current-session marker.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-UvkrFHZf66U",
+                      "text": "Sessions listed with fields",
+                      "given": null,
+                      "when": "a user requests their sessions",
+                      "then": "each active session shows device label, IP, created, last used, and exactly one is marked current",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-lzd1yF83_aY"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "needs a look",
+                  "confidence_note": "BRD does not say how the current session is identified; assumed from the session id carried by the caller's access token.",
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-TTQj288JBPQ",
+                  "spec_id": "spec-Mh3EaX0_mKo",
+                  "title": "End own session",
+                  "description": "Revoke a chosen session of the caller, invalidating its refresh token immediately.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-kLS5rYxTkgY",
+                      "text": "Next exchange fails",
+                      "given": null,
+                      "when": "a user ends a session from their list and its refresh token is then exchanged",
+                      "then": "the exchange fails",
+                      "met": false
+                    },
+                    {
+                      "id": "ac-h6Kk-cvp2Sc",
+                      "text": "Access token stays valid",
+                      "given": null,
+                      "when": "a session is ended and an already-issued access token is used within its 15 minutes",
+                      "then": "the access token is still accepted",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-HcaYBbNiC54",
+                    "task-15u7cm1yA4s"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "confident",
+              "confidence_note": null,
+              "confidence_options": []
+            }
+          ],
+          "status": "approved",
+          "included": true,
+          "confidence": "confident",
+          "confidence_note": null,
+          "confidence_options": []
+        },
+        {
+          "id": "story-AVGzm0Tt8t8",
+          "epic_id": "epic-KOeZ8e1bjq4",
+          "code_number": 5,
+          "title": "Admin revokes user sessions",
+          "narrative": "As a security admin, I want to list and end any user's sessions, so that I can respond to an incident.",
+          "specs": [
+            {
+              "id": "spec-DtlCsx5Szuk",
+              "story_id": "story-AVGzm0Tt8t8",
+              "title": "Admin session API",
+              "description": "Admin-only endpoints to list a user's sessions, end one, or end all.",
+              "tasks": [
+                {
+                  "id": "task-r1c4HYJosAE",
+                  "spec_id": "spec-DtlCsx5Szuk",
+                  "title": "Enforce security admin authorization",
+                  "description": "Restrict admin session endpoints to callers holding the security admin role, as asserted by a role claim in the access token.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-42KrtoFdwP4",
+                      "text": "Non-admin denied",
+                      "given": null,
+                      "when": "a caller without the security admin role calls an admin session endpoint",
+                      "then": "the request is rejected as forbidden",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-hLzcSUBR0pg",
+                  "spec_id": "spec-DtlCsx5Szuk",
+                  "title": "Admin list and end user sessions",
+                  "description": "Let a security admin list any user's sessions and end any single session.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-aTG2dGqU7aw",
+                      "text": "Admin lists sessions",
+                      "given": null,
+                      "when": "an admin requests another user's sessions",
+                      "then": "that user's active sessions are returned",
+                      "met": false
+                    },
+                    {
+                      "id": "ac-0C5EZMyKUos",
+                      "text": "Admin ends a session",
+                      "given": null,
+                      "when": "an admin ends one of that user's sessions",
+                      "then": "its refresh token is rejected on the next exchange",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-r1c4HYJosAE",
+                    "task-TTQj288JBPQ"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                },
+                {
+                  "id": "task-2fzhOuV2qBo",
+                  "spec_id": "spec-DtlCsx5Szuk",
+                  "title": "End all sessions of a user",
+                  "description": "Provide a single call that revokes every active session of a given user.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-DbLqWFsEoss",
+                      "text": "All sessions ended",
+                      "given": null,
+                      "when": "an admin ends all sessions of a user in one call",
+                      "then": "every session of that user is revoked and none can be exchanged",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-hLzcSUBR0pg"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "needs a look",
+              "confidence_note": "Endpoint shape is not specified; assumed mirrors of the user endpoints keyed by user id.",
+              "confidence_options": []
+            }
+          ],
+          "status": "approved",
+          "included": true,
+          "confidence": "needs a look",
+          "confidence_note": "BRD names the security admin role but not how admin rights are granted or checked.",
+          "confidence_options": []
+        },
+        {
+          "id": "story-vBRDs1cwOTU",
+          "epic_id": "epic-KOeZ8e1bjq4",
+          "code_number": 6,
+          "title": "Cap active sessions per user",
+          "narrative": "As a security admin, I want each user limited to 10 active sessions, so that stale sessions do not accumulate.",
+          "specs": [
+            {
+              "id": "spec-QpRYLAKfHZU",
+              "story_id": "story-vBRDs1cwOTU",
+              "title": "Session limit",
+              "description": "On sign-in, if the user already holds 10 active sessions, end the least recently used one.",
+              "tasks": [
+                {
+                  "id": "task-nkI776Wxz80",
+                  "spec_id": "spec-QpRYLAKfHZU",
+                  "title": "Evict LRU session at limit",
+                  "description": "At sign-in, when the user has 10 active sessions, revoke the session with the oldest last-used time before creating the new one.",
+                  "acceptance_criteria": [
+                    {
+                      "id": "ac-OOOANEbmtj4",
+                      "text": "11th sign-in evicts LRU",
+                      "given": null,
+                      "when": "a user with 10 active sessions signs in an 11th time",
+                      "then": "the least recently used session is ended and exactly 10 active sessions remain",
+                      "met": false
+                    }
+                  ],
+                  "depends_on": [
+                    "task-lzd1yF83_aY",
+                    "task-TTQj288JBPQ"
+                  ],
+                  "code_refs": [],
+                  "estimate": null,
+                  "status": "approved",
+                  "included": true,
+                  "confidence": "confident",
+                  "confidence_note": null,
+                  "confidence_options": []
+                }
+              ],
+              "status": "approved",
+              "included": true,
+              "confidence": "confident",
+              "confidence_note": null,
+              "confidence_options": []
+            }
+          ],
+          "status": "approved",
+          "included": true,
+          "confidence": "confident",
+          "confidence_note": null,
+          "confidence_options": []
+        }
+      ],
+      "status": "approved",
+      "included": true,
+      "confidence": "confident",
+      "confidence_note": null,
+      "confidence_options": []
+    }
+  ],
+  "generation_error": null,
+  "status": "approved",
+  "owner_user_id": "89d9bdbf-4bec-4f05-bd29-5cf7ee6b8fca",
+  "config_id": "spec-engineer",
+  "git_binding": null,
+  "build_spec_revision": null,
+  "build_code_commit_sha": null,
+  "repo_url": null,
+  "build_session_id": null,
+  "approved_by": "organiser@indnord.com",
+  "approved_at": "2026-11-10T19:48:42.674307Z",
+  "test_runs": [],
+  "review_runs": [],
+  "revision": 5,
+  "created_at": "2026-11-10T19:45:49.815108Z",
+  "updated_at": "2026-11-10T19:48:42.675004Z"
+}
